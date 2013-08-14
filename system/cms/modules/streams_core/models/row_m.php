@@ -716,8 +716,12 @@ class Row_m extends MY_Model {
 	 */
 	private function process_where($where)
 	{
-		// Remove ()
-		$where = trim($where, '()');
+		// Get rid of where ()
+		if ($where[0] == '(' and $where[strlen($where)-1] == ')')
+		{
+			$where = ltrim('(');
+			$where = rtrim(')');
+		}
 
 		// Find the fields between the backticks
 		preg_match_all('/`[a-zA-Z0-9_]+`/', $where, $matches);
@@ -1053,9 +1057,11 @@ class Row_m extends MY_Model {
 	 * @param	int
 	 * @param	array - update data
 	 * @param	skips - optional array of skips
+	 * @param extra - optional assoc array of data to exclude from processing, but to
+	 * 						include in saving to the database.
 	 * @return	bool
 	 */
-	public function update_entry($fields, $stream, $row_id, $form_data, $skips = array())
+	public function update_entry($fields, $stream, $row_id, $form_data, $skips = array(), $extra = array())
 	{
 		$this->load->helper('text');
 
@@ -1066,11 +1072,20 @@ class Row_m extends MY_Model {
 		$update_data = $this->run_field_pre_processes($fields, $stream, $row_id, $form_data, $skips);
 
 		// -------------------------------------
+		// Merge Extra Data
+		// -------------------------------------
+
+		if ( ! empty($extra))
+		{
+			$update_data = array_merge($update_data, $extra);
+		}
+
+		// -------------------------------------
 		// Set standard fields
 		// -------------------------------------
 
 		$update_data['updated'] = date('Y-m-d H:i:s');
-		
+
 		// -------------------------------------
 		// Insert data
 		// -------------------------------------
@@ -1130,11 +1145,10 @@ class Row_m extends MY_Model {
 				$form_data[$field->field_slug] = null;
 			}
 
+			// If this is not in our skips list, process it.
 			if ( ! in_array($field->field_slug, $skips))
 			{
-				$type_call = $field->field_type;
-			
-				$type = $this->type->types->$type_call;
+				$type = $this->type->types->{$field->field_type};
 	
 				if ( ! isset($type->alt_process) or ! $type->alt_process)
 				{
@@ -1169,7 +1183,7 @@ class Row_m extends MY_Model {
 							$return_data[$field->field_slug] = null;
 						}
 					}
-				}	
+				}
 				else
 				{
 					// If this is an alt_process, there can still be a pre_save,
@@ -1186,7 +1200,7 @@ class Row_m extends MY_Model {
 						);
 					}
 				}
-			}	
+			}
 		}
 
 		return $return_data;

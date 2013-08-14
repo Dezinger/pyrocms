@@ -79,6 +79,7 @@ class Fields
      * @param	bool - are we using reCAPTCHA?
      * @param	array - all the skips
      * @param	array - extra data:
+     * @param	array - default values: Only used during new method.
      *
      * - email_notifications
      * - return
@@ -90,7 +91,7 @@ class Fields
      *
      * @return	array - fields
      */
- 	public function build_form($stream, $method, $row = false, $plugin = false, $recaptcha = false, $skips = array(), $extra = array())
+ 	public function build_form($stream, $method, $row = false, $plugin = false, $recaptcha = false, $skips = array(), $extra = array(), $defaults = array())
  	{
  		$this->CI->load->helper(array('form', 'url'));
  	
@@ -99,10 +100,10 @@ class Fields
 		// -------------------------------------
 		
 		$default_extras = array(
-			'email_notifications'		=> NULL,
+			'email_notifications'		=> null,
 			'return'					=> current_url(),
-			'error_start'				=> NULL,
-			'error_end'					=> NULL,
+			'error_start'				=> null,
+			'error_end'					=> null,
 			'required'					=> '<span>*</span>'
 		);
 
@@ -126,60 +127,14 @@ class Fields
 		
 		extract($extra);
 
- 		// -------------------------------------
-		// Get Stream Fields
 		// -------------------------------------
-		
-		$stream_fields = $this->CI->streams_m->get_stream_fields($stream->id);
-		
-		// Can't do nothing if we don't have any fields		
-		if ($stream_fields === false) return false;
-			
+		// Form Key Check
 		// -------------------------------------
-		// Run Type Events
+		// Form keys help determine which
+		// in a series of multiple forms on the same
+		// page the fields library will handle.
 		// -------------------------------------
 
-		$this->run_field_events($stream_fields, $skips);
-				
-		// -------------------------------------
-		// Set Validation Rules
-		// -------------------------------------
-
-		$row_id = ($method == 'edit') ? $row->id : null;
-
-		$this->set_rules($stream_fields, $method, $skips, false, $row_id);
-
-		// -------------------------------------
-		// Set Error Delimns
-		// -------------------------------------
-
-		$this->CI->form_validation->set_error_delimiters($extra['error_start'], $extra['error_end']);
-
-		// -------------------------------------
-		// Set reCAPTCHA
-		// -------------------------------------
- 
-		if ($recaptcha)
-		{
-			$this->CI->config->load('streams_core/recaptcha');
-			$this->CI->load->library('streams_core/Recaptcha');
-			
-			$this->CI->form_validation->set_rules('recaptcha_response_field', 'lang:recaptcha_field_name', 'required|check_captcha');
-		}
-		
-		// -------------------------------------
-		// Set Values
-		// -------------------------------------
-
-		$values = $this->set_values($stream_fields, $row, $method, $skips);
-
-		// -------------------------------------
-		// Validation
-		// -------------------------------------
-		
-		$result_id = '';
-
-		// Find the form key
 		$form_key = (isset($extra['form_key'])) ? $extra['form_key'] : null;
 
 		// Form key check. If no data, we must assume it is true.
@@ -191,6 +146,79 @@ class Fields
 		{
 			$key_check = true;
 		}
+
+ 		// -------------------------------------
+		// Get Stream Fields
+		// -------------------------------------
+		
+		$stream_fields = $this->CI->streams_m->get_stream_fields($stream->id);
+		
+		// Can't do nothing if we don't have any fields		
+		if ($stream_fields === false)
+		{
+			return null;
+		}
+			
+		// -------------------------------------
+		// Run Type Events
+		// -------------------------------------
+		// No matter what, we'll need these 
+		// events run for field type assets
+		// and other processes.
+		// -------------------------------------
+
+		$this->run_field_events($stream_fields, $skips);
+	
+		// -------------------------------------
+		// Get row id, if applicable
+		// -------------------------------------
+
+		$row_id = ($method == 'edit') ? $row->id : null;
+			
+		// -------------------------------------
+		// Set Validation Rules
+		// -------------------------------------
+		// We will only set the rules if the
+		// data has been posted. This works hand
+		// in hand with checking the $_POST array
+		// as well as the data validation when
+		// we decide what to do with the form.
+		// -------------------------------------
+
+		if ($_POST and $key_check)
+		{
+			$this->set_rules($stream_fields, $method, $skips, false, $row_id);
+		}
+
+		// -------------------------------------
+		// Set Error Delimns
+		// -------------------------------------
+
+		$this->CI->form_validation->set_error_delimiters($extra['error_start'], $extra['error_end']);
+
+		// -------------------------------------
+		// Set reCAPTCHA
+		// -------------------------------------
+ 
+		if ($recaptcha and $_POST)
+		{
+			$this->CI->config->load('streams_core/recaptcha');
+			$this->CI->load->library('streams_core/Recaptcha');
+			
+			$this->CI->form_validation->set_rules('recaptcha_response_field', 'lang:recaptcha_field_name', 'required|check_captcha');
+		}
+		
+		// -------------------------------------
+		// Set Values
+		// -------------------------------------
+
+		$values = $this->set_values($stream_fields, $row, $method, $skips, $defaults, $key_check);
+
+		// -------------------------------------
+		// Validation
+		// -------------------------------------
+		
+		$result_id = '';
 
 		if ($_POST and $key_check)
 		{
@@ -255,7 +283,7 @@ class Fields
 			
 				// If return url is set, redirect and replace -id- with the result ID
 				// Otherwise return id
-				if ($extra['return'])
+				if ($extra['return'] or $plugin === true)
 				{
 					redirect(str_replace('-id-', $result_id, $extra['return']));
 				}
@@ -319,9 +347,10 @@ class Fields
 	 * @param 	object - row
 	 * @param 	string - edit or new
 	 * @param 	array
+	 * @param 	array
 	 * @return 	array
 	 */
-	public function set_values($stream_fields, $row, $mode, $skips)
+	public function set_values($stream_fields, $row, $mode, $skips, $defaults, $key_check = true)
 	{
 		$values = array();
 		
@@ -329,12 +358,17 @@ class Fields
 		{
 			if ( ! in_array($stream_field->field_slug, $skips))
 			{
-				if ( ! isset($_POST[$stream_field->field_slug]) and ! isset($_POST[$stream_field->field_slug.'[]']))
+				if ( ! $key_check)
+				{
+					$values[$stream_field->field_slug] = null;
+				}
+				elseif ( ! isset($_POST[$stream_field->field_slug]) and ! isset($_POST[$stream_field->field_slug.'[]']))
 				{
 					// If this is a new entry and there is no post data,
 					// we see if:
 					// a - there is data from the DB to show
-					// b - there is a default value to show
+					// b - 1. there is a defaults value sent to the form ($defaults)
+					// b - 2. there is a default value to show from the assignment
 					// Otherwise, it's just null
 					if (isset($row->{$stream_field->field_slug}))
 					{
@@ -342,7 +376,7 @@ class Fields
 					}
 					else
 					{
-						$values[$stream_field->field_slug] = (isset($stream_field->field_data['default_value'])) ? $stream_field->field_data['default_value'] : null;
+						$values[$stream_field->field_slug] = (isset($defaults[$stream_field->field_slug]) ? $defaults[$stream_field->field_slug] : (isset($stream_field->field_data['default_value']) ? $stream_field->field_data['default_value'] : null));
 					}
 				}
 				else
@@ -493,7 +527,7 @@ class Fields
 							
 				if ($stream_field->is_required == 'yes')
 				{
-					if (isset($type->input_is_file) && $type->input_is_file === TRUE)
+					if (isset($type->input_is_file) && $type->input_is_file === true)
 					{
 						$rules[] = 'streams_file_required['.$stream_field->field_slug.']';
 					}
@@ -656,8 +690,8 @@ class Fields
 
 		// We accept a null to/from, as these can be
 		// created automatically.
-		if ( ! isset($notify) AND ! $notify) return NULL;
-		if ( ! isset($template) AND ! $template) return NULL;
+		if ( ! isset($notify) and ! $notify) return null;
+		if ( ! isset($template) and ! $template) return null;
 			
 		// -------------------------------------
 		// Get e-mails. Forget if there are none
@@ -665,7 +699,7 @@ class Fields
 
 		$emails = explode("|", $notify);
 
-		if (empty($emails)) return NULL;
+		if (empty($emails)) return null;
 
 		foreach($emails as $key => $piece)
 		{
@@ -729,7 +763,7 @@ class Fields
 
 		$this->CI->load->library('Email');
 		
-		if (isset($from) AND $from)
+		if (isset($from) and $from)
 		{
 			$email_pieces = explode("|", $from);
 		
@@ -779,7 +813,7 @@ class Fields
 	 */
 	private function _process_email_address($email)
 	{	
-		if (strpos($email, '@') === FALSE AND $this->CI->input->post($email))
+		if (strpos($email, '@') === false and $this->CI->input->post($email))
 		{
 			return $this->CI->input->post($email);
 		}
